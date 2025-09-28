@@ -84,11 +84,16 @@ func AcceptOrders(bot *tgbotapi.BotAPI, db *sql.DB, fromID int64, orderID int) {
 func CompliteOrders(bot *tgbotapi.BotAPI, db *sql.DB, fromID int64, orderID int, decision string) {
 	if decision == "accept" {
 		buyerID, product := database.CompleteOrder(db, orderID, decision)
-		msgBuyer := fmt.Sprintf("Заказа (%s) доставлен в офис.\nМожно забирать.", product)
-		msg := tgbotapi.NewMessage(buyerID, msgBuyer)
-		msgAdmin := tgbotapi.NewMessage(fromID, "Покупатель уведомлен о готовности заказа.✅")
-		bot.Send(msg)
-		bot.Send(msgAdmin)
+		if product == "complite" {
+			msgAdmin := tgbotapi.NewMessage(fromID, "Заказ уже был обработан! ⛔️")
+			bot.Send(msgAdmin)
+		} else {
+			msgBuyer := fmt.Sprintf("Заказа (%s) доставлен в офис.\nМожно забирать.", product)
+			msg := tgbotapi.NewMessage(buyerID, msgBuyer)
+			msgAdmin := tgbotapi.NewMessage(fromID, "Покупатель уведомлен о готовности заказа.✅")
+			bot.Send(msg)
+			bot.Send(msgAdmin)
+		}
 	}
 	if decision == "deny" {
 		buyerID, product := database.CompleteOrder(db, orderID, decision)

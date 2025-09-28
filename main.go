@@ -8,6 +8,7 @@ import (
 	"log"
 	_ "modernc.org/sqlite"
 	"os"
+	"strconv"
 	"tbViT/callback"
 	"tbViT/database"
 	"tbViT/features"
@@ -29,6 +30,10 @@ func main() {
 	botToken := os.Getenv("TOCKEN")
 	if botToken == "" {
 		panic("Missing token")
+	}
+	superUser, err := strconv.ParseInt(os.Getenv("TELEGRAM_SUPER_USER"), 10, 64)
+	if err != nil {
+		panic("not valid superUser")
 	}
 	db, err := sql.Open("sqlite", "botdata.db")
 	if err != nil {
@@ -106,7 +111,7 @@ func main() {
 				log.Println("Access Error:", err)
 			}
 
-			menuMarkup := features.GenMainMenu(accessLevel)
+			menuMarkup := features.GenMainMenu(accessLevel, userID, superUser)
 			response := tgbotapi.NewMessage(userID, "Ваше меню:")
 			response.ReplyMarkup = menuMarkup
 
@@ -118,7 +123,7 @@ func main() {
 		}
 
 		if update.CallbackQuery != nil {
-			callback.HandleCallback(bot, db, update.CallbackQuery, userState, shopState)
+			callback.HandleCallback(bot, db, update.CallbackQuery, userState, shopState, superUser)
 			continue
 		}
 
@@ -137,6 +142,34 @@ func main() {
 			}
 
 			state, ok := userState[userID]
+
+			if ok && (state.Field == "super_user:wait_rest_number" || state.Field == "super_user:access") && userID == superUser {
+				switch state.Field {
+				case "super_user:wait_rest_number":
+					restNumber, err := strconv.Atoi(text)
+					if err != nil {
+						bot.Send(tgbotapi.NewMessage(userID, "❌ Введи корректный номер предприятия (целое число)!"))
+					} else {
+						err = database.UpdateRest(db, userID, text)
+						if err != nil {
+							bot.Send(tgbotapi.NewMessage(userID, "Ошибка super_user:transition!"))
+						} else {
+							bot.Send(tgbotapi.NewMessage(userID, "Номер нового предприятия: "+strconv.Itoa(restNumber)))
+						}
+						delete(userState, userID)
+						continue
+					}
+				case "super_user:wait_access_level":
+					err = database.ChangeAccess(db, userID, text)
+					if err != nil {
+						bot.Send(tgbotapi.NewMessage(userID, "Ошибка super_user:access!"))
+					} else {
+						bot.Send(tgbotapi.NewMessage(userID, "Текущий уровень: "+text))
+					}
+					delete(userState, userID)
+					continue
+				}
+			}
 
 			if ok && state.Field == "wait_table_number" {
 				desiredRole := state.Value // worker/manager/admin
@@ -162,7 +195,7 @@ func main() {
 					continue
 				}
 
-				// 👷‍♂️ Для worker/manager — сразу применяем
+				//Для worker/manager — сразу применяем
 				err := database.ChangeRole(db, userID, tableNumber, desiredRole)
 				if err != nil {
 					bot.Send(tgbotapi.NewMessage(userID, "❌ Ошибка изменения роли: "+err.Error()))

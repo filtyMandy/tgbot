@@ -19,7 +19,7 @@ type CorrectionState struct {
 
 var accessLevel string
 
-func HandleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery, userState map[int64]*CorrectionState, shopState map[int64]*CorrectionState) {
+func HandleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.CallbackQuery, userState map[int64]*CorrectionState, shopState map[int64]*CorrectionState, superUser int64) {
 	fromID := callback.From.ID
 	data := callback.Data
 
@@ -36,6 +36,9 @@ func HandleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Callbac
 	log.Printf("Callback data: %s, user: %d, level: %s", data, fromID, accessLevel)
 
 	switch {
+	case strings.HasPrefix(data, "super_user") && fromID == superUser:
+		handleSuper(bot, db, callback, userState)
+		answerCallback(bot, callback.ID, "")
 	case strings.HasPrefix(data, "approve:") && accessLevel == "admin":
 		parts := strings.Split(data, ":")
 		if len(parts) == 3 {

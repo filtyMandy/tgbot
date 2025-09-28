@@ -50,9 +50,13 @@ FROM orders WHERE telegram_id=? ORDER BY created_at DESC`, fromID)
 func CompleteOrder(db *sql.DB, id int, decision string) (int64, string) {
 	var buyerID int64
 	var price int
-	var product string
-	err := db.QueryRow(`SELECT telegram_id, price, product_name FROM orders WHERE id = ?`,
-		id).Scan(&buyerID, &price, &product)
+	var product, status string
+	err := db.QueryRow(`SELECT telegram_id, price, product_name, status FROM orders WHERE id = ?`,
+		id).Scan(&buyerID, &price, &product, &status)
+	if status == "deny" || status == "accept" {
+		return buyerID, "complite"
+	}
+
 	if err != nil {
 		log.Printf("Ошибка получения данных при возврате средств: %v", err)
 	}

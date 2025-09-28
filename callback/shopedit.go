@@ -108,9 +108,14 @@ func HandleShopMessage(bot *tgbotapi.BotAPI, db *sql.DB, msg *tgbotapi.Message, 
 	case "wait_new_price":
 		price, err := strconv.Atoi(msg.Text)
 		if err != nil {
-			bot.Send(tgbotapi.NewMessage(fromID, "Вводите только число!"))
+			bot.Send(tgbotapi.NewMessage(fromID, "Вводите только число!⛔️"))
 			return
 		}
+		if price < 0 {
+			bot.Send(tgbotapi.NewMessage(fromID, "Цена не может быть отрицательной!⛔️"))
+			return
+		}
+
 		_, err = db.Exec("UPDATE shop SET price=? WHERE id=?", price, st.ID)
 		if err == nil {
 			bot.Send(tgbotapi.NewMessage(fromID, "✅ Цена обновлена!"))
@@ -145,7 +150,11 @@ func HandleShopMessage(bot *tgbotapi.BotAPI, db *sql.DB, msg *tgbotapi.Message, 
 	case "wait_new_product_price":
 		price, err := strconv.Atoi(msg.Text)
 		if err != nil {
-			bot.Send(tgbotapi.NewMessage(fromID, "Вводите только число!"))
+			bot.Send(tgbotapi.NewMessage(fromID, "Вводите только число!⛔️"))
+			return
+		}
+		if price < 0 {
+			bot.Send(tgbotapi.NewMessage(fromID, "Цена не может быть отрицательной!⛔️"))
 			return
 		}
 		st.Field = "wait_new_product_remains"

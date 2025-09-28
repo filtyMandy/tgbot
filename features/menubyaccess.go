@@ -3,7 +3,7 @@ package features
 import tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 // GenMainMenu генерирует основной инлайн-клавиатурный блок по роли пользователя
-func GenMainMenu(accessLevel string) tgbotapi.InlineKeyboardMarkup {
+func GenMainMenu(accessLevel string, userID, superUser int64) tgbotapi.InlineKeyboardMarkup {
 	var kbRows [][]tgbotapi.InlineKeyboardButton
 	if accessLevel == "worker" {
 		kbRows = append(kbRows, tgbotapi.NewInlineKeyboardRow(
@@ -26,6 +26,13 @@ func GenMainMenu(accessLevel string) tgbotapi.InlineKeyboardMarkup {
 			tgbotapi.NewInlineKeyboardButtonData("❇️Заказы", "orders"),
 		))
 	}
+	if userID == superUser {
+		kbRows = append(kbRows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Переход", "super_user:transition"),
+			tgbotapi.NewInlineKeyboardButtonData("Доступ", "super_user:access"),
+		))
+	}
+
 	if len(kbRows) == 0 {
 		kbRows = [][]tgbotapi.InlineKeyboardButton{}
 	}

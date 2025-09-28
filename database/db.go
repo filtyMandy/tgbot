@@ -11,6 +11,34 @@ import (
 	"time"
 )
 
+func ChangeAccess(db *sql.DB, userID int64, accessLevel string) error {
+	_, err := db.Exec("UPDATE users SET access_level = ? WHERE telegram_id = ?", accessLevel, userID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func UpdateRest(db *sql.DB, userID int64, value string) error {
+	var exists bool
+	row := db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE telegram_id=?)", userID)
+	err := row.Scan(&exists)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	if exists {
+		_, err = db.Exec("UPDATE users SET rest_number=? WHERE telegram_id=?", value, userID)
+	} else {
+		_, err = db.Exec(`INSERT INTO users(telegram_id, rest_number, name, table_number, access_level, verified) VALUES(?, ?)`,
+			userID, value, "SuperUser", "999", "admin", 1)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func DeleteUser(db *sql.DB, telegramID int64) error {
 	_, err := db.Exec("DELETE FROM users WHERE telegram_id = ?", telegramID)
 	return err
