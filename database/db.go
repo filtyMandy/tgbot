@@ -12,10 +12,19 @@ import (
 )
 
 func ChangeAccess(db *sql.DB, userID int64, accessLevel string) error {
-	_, err := db.Exec("UPDATE users SET access_level = ? WHERE telegram_id = ?", accessLevel, userID)
+	result, err := db.Exec("UPDATE users SET access_level = ? WHERE telegram_id = ?", accessLevel, userID)
 	if err != nil {
+		log.Printf("Ошибка при обновлении access_level для %d: %v", userID, err)
 		return err
 	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		log.Printf("Пользователь с telegram_id=%d не найден", userID)
+	} else {
+		log.Printf("Уровень доступа для %d изменён на %s", userID, accessLevel)
+	}
+
 	return nil
 }
 
@@ -24,17 +33,26 @@ func UpdateRest(db *sql.DB, userID int64, value string) error {
 	row := db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE telegram_id=?)", userID)
 	err := row.Scan(&exists)
 	if err != nil {
-		log.Println(err)
+		log.Printf("Ошибка при проверке существования пользователя %d: %v", userID, err)
 		return err
 	}
+
 	if exists {
 		_, err = db.Exec("UPDATE users SET rest_number=? WHERE telegram_id=?", value, userID)
+		if err != nil {
+			log.Printf("Ошибка при обновлении пользователя %d: %v", userID, err)
+			return err
+		}
 	} else {
-		_, err = db.Exec(`INSERT INTO users(telegram_id, rest_number, name, table_number, access_level, verified) VALUES(?, ?)`,
+		_, err = db.Exec(`
+			INSERT INTO users(telegram_id, rest_number, name, table_number, access_level, verified) 
+			VALUES(?, ?, ?, ?, ?, ?)`,
 			userID, value, "SuperUser", "999", "admin", 1)
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			log.Printf("Ошибка при создании пользователя %d: %v", userID, err)
+			return err
+		}
+		log.Printf("Создан новый пользователь: telegram_id=%d, rest_number=%s", userID, value)
 	}
 	return nil
 }

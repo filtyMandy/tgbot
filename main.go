@@ -143,7 +143,7 @@ func main() {
 
 			state, ok := userState[userID]
 
-			if ok && (state.Field == "super_user:wait_rest_number" || state.Field == "super_user:access") && userID == superUser {
+			if ok && (state.Field == "super_user:wait_rest_number" || state.Field == "super_user:wait_access_level") && userID == superUser {
 				switch state.Field {
 				case "super_user:wait_rest_number":
 					restNumber, err := strconv.Atoi(text)
