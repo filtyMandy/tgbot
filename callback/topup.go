@@ -9,7 +9,7 @@ import (
 	"tbViT/database"
 )
 
-func handleTopupCallback(
+func handleTopUpCallback(
 	bot *tgbotapi.BotAPI,
 	db *sql.DB,
 	fromID int64,

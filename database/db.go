@@ -253,12 +253,12 @@ func SendWorkersList(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, status stri
 	paginationButtons := []tgbotapi.InlineKeyboardButton{}
 	if page > 0 {
 		paginationButtons = append(paginationButtons,
-			tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", fmt.Sprintf("select_worker:%d:%s:%s", page-1, status, dep)),
+			tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", fmt.Sprintf("topup_select_worker:%d:%s:%s", page-1, status, dep)),
 		)
 	}
 	if offset+pageSize < total {
 		paginationButtons = append(paginationButtons,
-			tgbotapi.NewInlineKeyboardButtonData("➡️ Дальше", fmt.Sprintf("select_worker:%d:%s:%s", page+1, status, dep)),
+			tgbotapi.NewInlineKeyboardButtonData("➡️ Дальше", fmt.Sprintf("topup_select_worker:%d:%s:%s", page+1, status, dep)),
 		)
 	}
 	if len(paginationButtons) > 0 {

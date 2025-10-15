@@ -187,7 +187,7 @@ func HandleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Callbac
 		return
 
 	case strings.HasPrefix(data, "topup_") && (accessLevel == "admin" || accessLevel == "manager"):
-		handleTopupCallback(bot, db, fromID, data, callback)
+		handleTopUpCallback(bot, db, fromID, data, callback)
 		answerCallback(bot, callback.ID, "")
 		return
 
