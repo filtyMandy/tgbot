@@ -25,22 +25,30 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Определяем теги, которые будем использовать
       - name: Define Docker tags
         id: docker_meta
         uses: docker/metadata-action@v4
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/my-bot
           tags: |
-            type=semver,pattern={{version}}  # Использует версию из Git-тега (например, v1.2.3 -> 1.2.3)
-            type=semver,pattern={{major}}.{{minor}} # Например, v1.2.3 -> 1.2
-            type=semver,pattern={{major}}      # Например, v1.2.3 -> 1
-            type=raw,value=latest,enable={{is_main}} # Добавляем 'latest' только если это push в main
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      # Шаг для добавления 'latest' ТОЛЬКО для main ветки
+      - name: Add 'latest' tag for main branch
+        if: github.ref == 'refs/heads/main' # Проверяем, что это push в main
+        id: docker_meta_latest # Используем другой id
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/my-bot
+          tags: |
+            type=raw,value=latest
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ steps.docker_meta.outputs.tags }}
+          tags: ${{ steps.docker_meta.outputs.tags }},${{ steps.docker_meta_latest.outputs.tags }}
           labels: ${{ steps.docker_meta.outputs.labels }}
