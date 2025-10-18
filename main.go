@@ -56,7 +56,8 @@ func main() {
         all_time_balance INTEGER,
         last_ts INTEGER,
         tmp_field INTEGER,
-        special_roll TEXT                         
+        special_roll TEXT, 
+         registration_start_time DATETIME                        
 	)`)
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS shop (

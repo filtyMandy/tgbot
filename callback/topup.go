@@ -4,108 +4,159 @@ import (
 	"database/sql"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"log"
 	"strconv"
 	"strings"
-	"tbViT/database"
+	"tbViT/database" // Убедитесь, что пути импорта корректны
 )
 
+// handleTopUpCallback обрабатывает callback-запросы, связанные с пополнением баланса.
+// Он парсит callback-данные, чтобы определить действие (выбор работника, выбор суммы)
+// и выполняет соответствующую операцию, напрямую используя ID из callback-данных.
 func handleTopUpCallback(
 	bot *tgbotapi.BotAPI,
 	db *sql.DB,
-	fromID int64,
-	data string,
-	callback *tgbotapi.CallbackQuery,
+	fromID int64, // ID пользователя, который инициировал callback (менеджер/админ)
+	data string, // callback_data
+	callback *tgbotapi.CallbackQuery, // объект callback-query
+	// accessLevel string,    // Уровень доступа теперь проверяется раньше, здесь не нужен
 ) {
 	switch {
+	// --- Инициация процесса пополнения ---
 	case data == "topup_":
 		dep, err := database.GetUserDep(db, fromID)
 		if err != nil {
 			bot.Send(tgbotapi.NewMessage(fromID, "Ошибка поиска вашего предприятия."))
 			return
 		}
-		database.SendWorkersList(bot, db, fromID, "topup_select_worker", dep, 0)
+		// Отправляем список работников. status "topup_select_worker" - это префикс для callback'ов выбора работника.
+		err = database.SendWorkersList(bot, db, fromID, "topup_select_worker", dep, 0)
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(fromID, "Не удалось отобразить список работников."))
+		}
 		answerCallback(bot, callback.ID, "")
 		return
 
+	// --- Обработка выбора суммы пополнения ---
 	case strings.HasPrefix(data, "topup_amount:"):
-		amountStr := strings.TrimPrefix(data, "topup_amount:")
-		amount, err := strconv.Atoi(amountStr)
-		if err != nil {
-			bot.Send(tgbotapi.NewMessage(fromID, "Ошибка суммы пополнения."))
-			return
-		}
-		// Получаем workerID из tmp_field менеджера
-		var workerID int64
-		err = db.QueryRow(`SELECT tmp_field FROM users WHERE telegram_id=?`, fromID).Scan(&workerID)
-		if err != nil {
-			bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: работник не выбран."))
+		// Ожидаемый формат: "topup_amount:сумма:workerID"
+		parts := strings.Split(data, ":")
+		if len(parts) != 3 {
+			bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: некорректный формат данных суммы пополнения."))
+			answerCallback(bot, callback.ID, "")
 			return
 		}
 
-		msg, isTrue, _ := database.TopUpBalance(db, workerID, amount)
-		bot.Send(tgbotapi.NewMessage(fromID, msg))
-		if isTrue {
-			bot.Send(tgbotapi.NewMessage(workerID, fmt.Sprintf("Баланс пополнен на %d 🌟!", amount)))
+		amountStr := parts[1]
+		workerIDStr := parts[2]
+
+		amount, err := strconv.Atoi(amountStr)
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: неверная сумма пополнения."))
+			answerCallback(bot, callback.ID, "")
+			return
 		}
-		db.Exec(`UPDATE users SET tmp_field='' WHERE telegram_id=?`, fromID)
+
+		workerID, err := strconv.ParseInt(workerIDStr, 10, 64)
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: неверный ID работника."))
+			answerCallback(bot, callback.ID, "")
+			return
+		}
+
+		// Проверяем, что workerID валиден
+		if workerID <= 0 {
+			bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: работник не выбран или ID некорректен."))
+			answerCallback(bot, callback.ID, "")
+			return
+		}
+
+		// Выполняем пополнение баланса работника
+		msg, isSuccess, err := database.TopUpBalance(db, workerID, amount)
+		if err != nil {
+			log.Printf("Ошибка TopUpBalance для workerID %d: %v", workerID, err)
+			bot.Send(tgbotapi.NewMessage(fromID, "Произошла ошибка при пополнении баланса."))
+			answerCallback(bot, callback.ID, "")
+			return
+		}
+
+		bot.Send(tgbotapi.NewMessage(fromID, msg))
+
+		if isSuccess {
+			bot.Send(tgbotapi.NewMessage(workerID, fmt.Sprintf("Ваш баланс пополнен на %d 🌟!", amount)))
+		}
+
+		// Сбрасываем tmp_field менеджера, т.к. операция завершена
+		// Это сделано для очистки состояния, даже если оно больше не используется напрямую.
+		_, err = db.Exec(`UPDATE users SET tmp_field='' WHERE telegram_id=?`, fromID)
+		if err != nil {
+			log.Printf("Ошибка сброса tmp_field для менеджера %d: %v", fromID, err)
+		}
 		answerCallback(bot, callback.ID, "Готово!")
 		return
 
-	case strings.HasPrefix(data, "topup_select_worker:") && (accessLevel == "admin" || accessLevel == "manager"):
-		// Проверяем формат callbackData
-		// Возможные варианты:
-		// - "select_worker:{workerID}"         — выбор работника
-		// - "select_worker:{page}:{status}:{dep}" — перелистывание
-
+	// --- Обработка выбора работника (предполагается, что доступ уже проверен) ---
+	case strings.HasPrefix(data, "topup_select_worker:"):
 		parts := strings.Split(data, ":")
-		if len(parts) == 2 {
-			// 👉 Выбор работника
-			workerID, err := strconv.ParseInt(parts[1], 10, 64)
-			if err != nil {
-				bot.Send(tgbotapi.NewMessage(fromID, "Ошибка ID работника."))
+
+		if len(parts) >= 2 && parts[0] == "topup_select_worker" {
+			if len(parts) == 2 {
+				// 👉 Выбор конкретного работника
+				workerID, err := strconv.ParseInt(parts[1], 10, 64)
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: некорректный ID работника."))
+					answerCallback(bot, callback.ID, "")
+					return
+				}
+
+				workerInfo := database.GetWorkerInfo(db, workerID)
+				if err != nil {
+					log.Printf("Ошибка получения информации о работнике (ID %d): %v", workerID, err)
+					bot.Send(tgbotapi.NewMessage(fromID, "Ошибка получения информации о работнике."))
+					answerCallback(bot, callback.ID, "")
+					return
+				}
+
+				// Формируем кнопки для выбора суммы, включая workerID в callback-данные
+				replyMarkup := tgbotapi.NewInlineKeyboardMarkup(
+					tgbotapi.NewInlineKeyboardRow(
+						tgbotapi.NewInlineKeyboardButtonData("1🌟", fmt.Sprintf("topup_amount:1:%d", workerID)),
+						tgbotapi.NewInlineKeyboardButtonData("2🌟", fmt.Sprintf("topup_amount:2:%d", workerID)),
+					),
+				)
+
+				msg := tgbotapi.NewMessage(fromID, fmt.Sprintf("%s\n\nВыберите сумму пополнения:", workerInfo))
+				msg.ReplyMarkup = replyMarkup
+
+				bot.Send(msg)
+				answerCallback(bot, callback.ID, "")
+				return
+
+			} else if len(parts) == 4 {
+				// 👉 Обработка пагинации (перелистывание страниц)
+				page, err := strconv.Atoi(parts[1])
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: некорректный номер страницы."))
+					answerCallback(bot, callback.ID, "")
+					return
+				}
+				status := parts[2]
+				dep := parts[3]
+
+				err = database.SendWorkersList(bot, db, fromID, status, dep, page)
+				if err != nil {
+					log.Printf("Ошибка при перелистывании списка работников (page %d, dep %s): %v", page, dep, err)
+					bot.Send(tgbotapi.NewMessage(fromID, "Ошибка при перелистывании списка."))
+				}
 				answerCallback(bot, callback.ID, "")
 				return
 			}
-			db.Exec(`UPDATE users SET tmp_field=? WHERE telegram_id=?`, workerID, fromID)
-			// Показываем выбор суммы
-			replyMarkup := tgbotapi.NewInlineKeyboardMarkup(
-				tgbotapi.NewInlineKeyboardRow(
-					tgbotapi.NewInlineKeyboardButtonData("1🌟", "topup_amount:1"),
-					tgbotapi.NewInlineKeyboardButtonData("2🌟", "topup_amount:2"),
-				),
-			)
-			info := fmt.Sprintf(database.GetWorkerInfo(db, workerID) + "\nВыберите сумму пополнения:")
-			msg := tgbotapi.NewMessage(fromID, info)
-			msg.ReplyMarkup = replyMarkup
-			bot.Send(msg)
-			answerCallback(bot, callback.ID, "")
-			return
-		} else if len(parts) == 4 {
-			// Перелистывание страниц
-			// Формат: select_worker:{page}:{status}:{dep}
-			page, err := strconv.Atoi(parts[1])
-			if err != nil {
-				bot.Send(tgbotapi.NewMessage(fromID, "Ошибка страницы."))
-				answerCallback(bot, callback.ID, "")
-				return
-			}
-			status := parts[2]
-			dep := parts[3]
-			err = database.SendWorkersList(bot, db, fromID, status, dep, page)
-			if err != nil {
-				bot.Send(tgbotapi.NewMessage(fromID, "Ошибка вывода списка работников."))
-			}
-			answerCallback(bot, callback.ID, "")
-			return
-		} else {
-			// Некорректный формат
-			bot.Send(tgbotapi.NewMessage(fromID, "❌ Ошибка при выборе работника."))
-			answerCallback(bot, callback.ID, "")
-			return
 		}
+		bot.Send(tgbotapi.NewMessage(fromID, "❌ Ошибка при выборе работника."))
+		answerCallback(bot, callback.ID, "")
+		return
 	}
 
-	// Если data не подходит
-	bot.Send(tgbotapi.NewMessage(fromID, "❌ Некорректная команда пополнения."))
+	// Если data не подходит ни под одно из условий выше
 	answerCallback(bot, callback.ID, "")
 }

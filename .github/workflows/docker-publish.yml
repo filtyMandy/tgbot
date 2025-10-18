@@ -3,6 +3,8 @@ name: Build and Push Docker image
 on:
   push:
     branches: [ main ]
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
 
 jobs:
@@ -23,9 +25,22 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Определяем теги, которые будем использовать
+      - name: Define Docker tags
+        id: docker_meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/my-bot
+          tags: |
+            type=semver,pattern={{version}}  # Использует версию из Git-тега (например, v1.2.3 -> 1.2.3)
+            type=semver,pattern={{major}}.{{minor}} # Например, v1.2.3 -> 1.2
+            type=semver,pattern={{major}}      # Например, v1.2.3 -> 1
+            type=raw,value=latest,enable={{is_main}} # Добавляем 'latest' только если это push в main
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/my-bot:latest
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
