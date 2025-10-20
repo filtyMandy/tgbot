@@ -35,11 +35,35 @@ func main() {
 	if err != nil {
 		panic("not valid superUser")
 	}
+
 	db, err := sql.Open("sqlite", "botdata.db")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
+
+	// --- Настройки SQLite для надежности и производительности ---
+	// Увеличивает время ожидания при блокировке базы данных (в миллисекундах)
+	// Это позволяет SQLite подождать, пока блокировка не снимется, вместо немедленного возврата ошибки.
+	_, err = db.Exec("PRAGMA busy_timeout = 10000;") // 10 секунд ожидания
+	if err != nil {
+		log.Printf("Warning: Failed to set busy_timeout: %v", err)
+	}
+
+	// Включает режим WAL (Write-Ahead Logging)
+	// WAL улучшает производительность одновременного доступа (чтение/запись) и надежность.
+	_, err = db.Exec("PRAGMA journal_mode=WAL;")
+	if err != nil {
+		log.Printf("Warning: Failed to set journal_mode=WAL: %v", err)
+	}
+
+	// Устанавливает режим синхронизации на FULL
+	// Это гарантирует, что данные будут записаны на диск перед тем, как операция COMMIT будет считаться завершенной.
+	// Повышает надежность ценой некоторого снижения скорости записи.
+	_, err = db.Exec("PRAGMA synchronous = FULL;")
+	if err != nil {
+		log.Printf("Warning: Failed to set synchronous=FULL: %v", err)
+	}
 
 	// Создаём таблицу
 	db.Exec(`CREATE TABLE IF NOT EXISTS users (

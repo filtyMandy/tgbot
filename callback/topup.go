@@ -16,10 +16,10 @@ import (
 func handleTopUpCallback(
 	bot *tgbotapi.BotAPI,
 	db *sql.DB,
-	fromID int64, // ID пользователя, который инициировал callback (менеджер/админ)
-	data string, // callback_data
+	fromID int64,                     // ID пользователя, который инициировал callback (менеджер/админ)
+	data string,                      // callback_data
 	callback *tgbotapi.CallbackQuery, // объект callback-query
-	// accessLevel string,    // Уровень доступа теперь проверяется раньше, здесь не нужен
+// accessLevel string,    // Уровень доступа теперь проверяется раньше, здесь не нужен
 ) {
 	switch {
 	// --- Инициация процесса пополнения ---
@@ -95,13 +95,13 @@ func handleTopUpCallback(
 		answerCallback(bot, callback.ID, "Готово!")
 		return
 
-	// --- Обработка выбора работника (предполагается, что доступ уже проверен) ---
+	//  Обработка выбора работника (предполагается, что доступ уже проверен)
 	case strings.HasPrefix(data, "topup_select_worker:"):
 		parts := strings.Split(data, ":")
 
 		if len(parts) >= 2 && parts[0] == "topup_select_worker" {
 			if len(parts) == 2 {
-				// 👉 Выбор конкретного работника
+				// Выбор конкретного работника
 				workerID, err := strconv.ParseInt(parts[1], 10, 64)
 				if err != nil {
 					bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: некорректный ID работника."))
