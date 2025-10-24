@@ -4,9 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	_ "github.com/jackc/pgx/v5/stdlib" // Регистрируем драйвер для database/sql
 	"github.com/joho/godotenv"
 	"log"
-	_ "modernc.org/sqlite"
 	"os"
 	"strconv"
 	"tbViT/callback"
@@ -21,102 +21,129 @@ var (
 	}
 )
 
+// userState и shopState остаются без изменений, так как это структуры Go, а не специфичные для БД типы.
 var userState = make(map[int64]*callback.CorrectionState)
 var shopState = make(map[int64]*callback.CorrectionState)
 
 func main() {
 
 	err := godotenv.Load()
+	if err != nil {
+		log.Println("Warning: Could not load .env file. Ensure environment variables are set.")
+	}
+
 	botToken := os.Getenv("TOCKEN")
 	if botToken == "" {
-		panic("Missing token")
+		panic("Missing token: TOCKEN environment variable is not set.")
 	}
-	superUser, err := strconv.ParseInt(os.Getenv("TELEGRAM_SUPER_USER"), 10, 64)
+	superUserStr := os.Getenv("TELEGRAM_SUPER_USER")
+	if superUserStr == "" {
+		panic("Missing super user ID: TELEGRAM_SUPER_USER environment variable is not set.")
+	}
+	superUser, err := strconv.ParseInt(superUserStr, 10, 64)
 	if err != nil {
-		panic("not valid superUser")
+		panic(fmt.Sprintf("Invalid TELEGRAM_SUPER_USER format: %v", err))
 	}
 
-	db, err := sql.Open("sqlite", "botdata.db")
-	if err != nil {
-		log.Fatal(err)
+	// Строка подключения к PostgreSQL
+	postgresDSN := os.Getenv("POSTGRES_DSN")
+	if postgresDSN == "" {
+		panic("POSTGRES_DSN environment variable is not set.")
 	}
+
+	// --- Открытие соединения с базой данных PostgreSQL ---
+	db, err := sql.Open("pgx", postgresDSN) // Используем "pgx" как драйвер
+	if err != nil {
+		log.Fatalf("Failed to open PostgreSQL database connection: %v", err)
+	}
+	// Важно: defer db.Close() должно идти после успешного открытия
 	defer db.Close()
 
-	// --- Настройки SQLite для надежности и производительности ---
-	// Увеличивает время ожидания при блокировке базы данных (в миллисекундах)
-	// Это позволяет SQLite подождать, пока блокировка не снимется, вместо немедленного возврата ошибки.
-	_, err = db.Exec("PRAGMA busy_timeout = 10000;") // 10 секунд ожидания
+	// Проверка соединения с БД
+	err = db.Ping()
 	if err != nil {
-		log.Printf("Warning: Failed to set busy_timeout: %v", err)
+		log.Fatalf("Failed to ping PostgreSQL database: %v", err)
 	}
+	log.Println("Successfully connected to PostgreSQL database.")
 
-	// Включает режим WAL (Write-Ahead Logging)
-	// WAL улучшает производительность одновременного доступа (чтение/запись) и надежность.
-	_, err = db.Exec("PRAGMA journal_mode=WAL;")
-	if err != nil {
-		log.Printf("Warning: Failed to set journal_mode=WAL: %v", err)
-	}
-
-	// Устанавливает режим синхронизации на FULL
-	// Это гарантирует, что данные будут записаны на диск перед тем, как операция COMMIT будет считаться завершенной.
-	// Повышает надежность ценой некоторого снижения скорости записи.
-	_, err = db.Exec("PRAGMA synchronous = FULL;")
-	if err != nil {
-		log.Printf("Warning: Failed to set synchronous=FULL: %v", err)
-	}
-
-	// Создаём таблицу
-	db.Exec(`CREATE TABLE IF NOT EXISTS users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		telegram_id INTEGER UNIQUE NOT NULL,
+	// --- Создание таблиц (если не существуют) ---
+	// PostgreSQL синтаксис для CREATE TABLE:
+	// INTEGER PRIMARY KEY AUTOINCREMENT -> SERIAL PRIMARY KEY (или BIGSERIAL PRIMARY KEY для больших ID)
+	// TEXT -> TEXT
+	// INTEGER -> INTEGER
+	// DATETIME -> TIMESTAMP WITHOUT TIME ZONE (или TIMESTAMP WITH TIME ZONE, если нужно учитывать часовые пояса)
+	// TIMESTAMP DEFAULT CURRENT_TIMESTAMP -> TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP (рекомендуется)
+	// BIGINT для telegram_id, так как он может быть большим.
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS users (
+		id SERIAL PRIMARY KEY, -- SERIAL автоматически создает последовательность и BIGINT
+		telegram_id BIGINT UNIQUE NOT NULL,
 		username TEXT,
 		name TEXT,
 		table_number TEXT,
 		rest_number INTEGER,
-		access_level TEXT, 
+		access_level TEXT,
 		verified INTEGER,
 		reg_state TEXT,
-        current_balance INTEGER,
-        all_time_balance INTEGER,
-        last_ts INTEGER,
-        tmp_field INTEGER,
-        special_roll TEXT, 
-         registration_start_time DATETIME                        
+        current_balance INTEGER DEFAULT 0,
+        all_time_balance INTEGER DEFAULT 0,
+        last_ts BIGINT DEFAULT 0, -- Unix timestamp
+        tmp_field TEXT,
+        special_roll TEXT,
+        registration_start_time TIMESTAMP WITH TIME ZONE -- TIMESTAMP WITH TIME ZONE предпочтительнее
 	)`)
+	if err != nil {
+		log.Fatalf("Failed to create users table in PostgreSQL: %v", err)
+	}
 
-	db.Exec(`CREATE TABLE IF NOT EXISTS shop (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS shop (
+		id SERIAL PRIMARY KEY,
 		product TEXT NOT NULL,
 		price INTEGER NOT NULL,
 		remains INTEGER,
-		rest_number INTEGER                        
+		rest_number INTEGER
 	)`)
+	if err != nil {
+		log.Fatalf("Failed to create shop table in PostgreSQL: %v", err)
+	}
 
-	db.Exec(`CREATE TABLE IF NOT EXISTS orders (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		telegram_id INTEGER NOT NULL,
-		product_name TEXT,  
-		status TEXT, 
-		product_id  INTEGER, 
-		rest_number INTEGER ,
-		price INTEGER,  
-		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP           
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS orders (
+		id SERIAL PRIMARY KEY,
+		telegram_id BIGINT NOT NULL,
+		product_name TEXT,
+		status TEXT,
+		product_id  INTEGER,
+		rest_number INTEGER,
+		price INTEGER,
+		created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP -- TIMESTAMP WITH TIME ZONE предпочтительнее
 	)`)
+	if err != nil {
+		log.Fatalf("Failed to create orders table in PostgreSQL: %v", err)
+	}
 
+	// --- Инициализация Telegram бота ---
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
-		log.Panic(err)
+		log.Panicf("Failed to create Telegram bot API: %v", err)
 	}
-	bot.Debug = true
+	bot.Debug = true // Включите для отладки, выключайте в продакшене
 
+	// --- Настройка команд бота ---
+	cmdConfig := tgbotapi.SetMyCommandsConfig{
+		Commands: userCommands,
+	}
+	_, err = bot.Request(cmdConfig)
+	if err != nil {
+		log.Printf("Error setting bot commands: %v", err)
+	} else {
+		log.Println("Bot commands set successfully.")
+	}
+
+	// --- Получение канала обновлений ---
 	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	u.Timeout = 60 // Увеличьте таймаут, если есть проблемы с задержками
 	updates := bot.GetUpdatesChan(u)
 
-	_, err = bot.Request(tgbotapi.NewSetMyCommands(userCommands...))
-	if err != nil {
-		log.Println("Ошибка установки меню user:", err)
-	}
+	log.Println("Bot started successfully. Waiting for updates...")
 
 	// Главный цикл получения и обработки событий
 	for update := range updates {
