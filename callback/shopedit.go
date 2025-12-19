@@ -20,7 +20,7 @@ func handleShopEdit(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQuery
 		features.ShowShopEdit(bot, fromID)
 	case data == "shop_edit:choose" && accessLevel == "admin":
 		rows, _ := db.Query(`SELECT id, product, price, remains FROM shop WHERE rest_number=(
-			SELECT rest_number FROM users WHERE telegram_id=?)`, fromID)
+			SELECT rest_number FROM users WHERE telegram_id=$1)`, fromID)
 		var keyboardRows [][]tgbotapi.InlineKeyboardButton
 		var hasItems bool
 		for rows.Next() {
@@ -116,7 +116,7 @@ func HandleShopMessage(bot *tgbotapi.BotAPI, db *sql.DB, msg *tgbotapi.Message, 
 			return
 		}
 
-		_, err = db.Exec("UPDATE shop SET price=? WHERE id=?", price, st.ID)
+		_, err = db.Exec("UPDATE shop SET price=$1 WHERE id=$2", price, st.ID)
 		if err == nil {
 			bot.Send(tgbotapi.NewMessage(fromID, "✅ Цена обновлена!"))
 		} else {
@@ -131,7 +131,7 @@ func HandleShopMessage(bot *tgbotapi.BotAPI, db *sql.DB, msg *tgbotapi.Message, 
 			bot.Send(tgbotapi.NewMessage(fromID, "Вводите только число!"))
 			return
 		}
-		_, err = db.Exec("UPDATE shop SET remains=? WHERE id=?", remains, st.ID)
+		_, err = db.Exec("UPDATE shop SET remains=$1 WHERE id=$2", remains, st.ID)
 		if err == nil {
 			log.Println("Ошибка UPDATE remains:", err)
 			bot.Send(tgbotapi.NewMessage(fromID, "✅ Остаток обновлён!"))
@@ -176,7 +176,7 @@ func HandleShopMessage(bot *tgbotapi.BotAPI, db *sql.DB, msg *tgbotapi.Message, 
 			log.Println("ошибка получения номера ресторана при добавлении товара", err)
 		}
 		price, _ := strconv.Atoi(parts[1])
-		_, err = db.Exec("INSERT INTO shop (product, price, remains, rest_number) VALUES (?, ?, ?, ?)",
+		_, err = db.Exec("INSERT INTO shop (product, price, remains, rest_number) VALUES ($1, $2, $3, $4)",
 			name, price, remains, restNum)
 		if err == nil {
 			bot.Send(tgbotapi.NewMessage(fromID, "✅ Товар добавлен!"))

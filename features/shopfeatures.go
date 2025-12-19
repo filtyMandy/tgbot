@@ -12,7 +12,7 @@ var SentMessages = make(map[int64][]int)
 
 func ShowShop(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, userID int64) {
 	restID, _ := database.GetUserRestID(db, userID)
-	rows, err := db.Query(`SELECT id, product, price, remains FROM shop WHERE remains > 0 AND rest_number=?`, restID)
+	rows, err := db.Query(`SELECT id, product, price, remains FROM shop WHERE remains > 0 AND rest_number=$1`, restID)
 	if err != nil {
 		bot.Send(tgbotapi.NewMessage(chatID, "Ошибка чтения магазина"))
 		return
@@ -83,8 +83,8 @@ func AcceptOrders(bot *tgbotapi.BotAPI, db *sql.DB, fromID int64, orderID int) {
 
 func CompliteOrders(bot *tgbotapi.BotAPI, db *sql.DB, fromID int64, orderID int, decision string) {
 	if decision == "accept" {
-		buyerID, product := database.CompleteOrder(db, orderID, decision)
-		if product == "complite" {
+		buyerID, product, _ := database.CompleteOrder(db, orderID, decision)
+		if product == "completed" {
 			msgAdmin := tgbotapi.NewMessage(fromID, "Заказ уже был обработан! ⛔️")
 			bot.Send(msgAdmin)
 		} else {
@@ -96,7 +96,7 @@ func CompliteOrders(bot *tgbotapi.BotAPI, db *sql.DB, fromID int64, orderID int,
 		}
 	}
 	if decision == "deny" {
-		buyerID, product := database.CompleteOrder(db, orderID, decision)
+		buyerID, product, _ := database.CompleteOrder(db, orderID, decision)
 		msgBuyer := fmt.Sprintf("Заказа (%s) отменен.\nПодробности у администратора магазина.", product)
 		msg := tgbotapi.NewMessage(buyerID, msgBuyer)
 		bot.Send(msg)

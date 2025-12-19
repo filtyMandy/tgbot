@@ -47,7 +47,7 @@ func handleBuyCallback(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQu
 	}()
 	// Проверяем баланс внутри транзакции
 	var balance int
-	err = tx.QueryRow(`SELECT current_balance FROM users WHERE telegram_id=?`, buyerID).Scan(&balance)
+	err = tx.QueryRow(`SELECT current_balance FROM users WHERE telegram_id=$1`, buyerID).Scan(&balance)
 	if err != nil {
 		log.Printf("Ошибка получения баланса для %d: %s", buyerID, err)
 		bot.Send(tgbotapi.NewMessage(buyerID, "Ошибка загрузки баланса."))
@@ -60,7 +60,7 @@ func handleBuyCallback(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQu
 		return
 	}
 	// Списание баланса
-	_, err = tx.Exec(`UPDATE users SET current_balance = current_balance - ? WHERE telegram_id=?`, price, buyerID)
+	_, err = tx.Exec(`UPDATE users SET current_balance = current_balance - $1 WHERE telegram_id=$2`, price, buyerID)
 	if err != nil {
 		bot.Send(tgbotapi.NewMessage(buyerID, "Ошибка при оплате."))
 		answerCallback(bot, cq.ID, "")
@@ -68,7 +68,7 @@ func handleBuyCallback(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQu
 	}
 
 	// Уменьшение остатка
-	_, err = tx.Exec(`UPDATE shop SET remains = remains - 1 WHERE id=? AND remains > 0`, productID)
+	_, err = tx.Exec(`UPDATE shop SET remains = remains - 1 WHERE id=$1 AND remains > 0`, productID)
 	if err != nil {
 		bot.Send(tgbotapi.NewMessage(buyerID, "Ошибка обновления склада."))
 		answerCallback(bot, cq.ID, "")
@@ -76,7 +76,7 @@ func handleBuyCallback(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQu
 	}
 	// Добавляем заказ в orders
 	_, err = tx.Exec(`
-  INSERT INTO orders (telegram_id, product_name, product_id, status, rest_number, price) VALUES (?, ?, ?, ?, ?, ?)`,
+  INSERT INTO orders (telegram_id, product_name, product_id, status, rest_number, price) VALUES ($1, $2, $3, $4, $5, $6)`,
 		buyerID, productName, productID, "в сборке", restNum, price,
 	)
 	if err != nil {

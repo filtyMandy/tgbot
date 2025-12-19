@@ -39,6 +39,7 @@ func HandleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Callbac
 	case strings.HasPrefix(data, "super_user") && fromID == superUser:
 		handleSuper(bot, db, callback, userState)
 		answerCallback(bot, callback.ID, "")
+
 	case strings.HasPrefix(data, "approve:") && accessLevel == "admin":
 		parts := strings.Split(data, ":")
 		if len(parts) == 3 {
