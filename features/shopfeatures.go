@@ -97,11 +97,16 @@ func CompliteOrders(bot *tgbotapi.BotAPI, db *sql.DB, fromID int64, orderID int,
 	}
 	if decision == "deny" {
 		buyerID, product, _ := database.CompleteOrder(db, orderID, decision)
-		msgBuyer := fmt.Sprintf("Заказа (%s) отменен.\nПодробности у администратора магазина.", product)
-		msg := tgbotapi.NewMessage(buyerID, msgBuyer)
-		bot.Send(msg)
-		msgAdmin := tgbotapi.NewMessage(fromID, "Покупатель уведомлен об отмене заказа.❌")
-		bot.Send(msgAdmin)
+		if product == "completed" {
+			msgAdmin := tgbotapi.NewMessage(fromID, "Заказ уже был обработан! ⛔️")
+			bot.Send(msgAdmin)
+		} else {
+			msgBuyer := fmt.Sprintf("Заказа (%s) отменен.\nПодробности у администратора магазина.", product)
+			msg := tgbotapi.NewMessage(buyerID, msgBuyer)
+			bot.Send(msg)
+			msgAdmin := tgbotapi.NewMessage(fromID, "Покупатель уведомлен об отмене заказа.❌")
+			bot.Send(msgAdmin)
+		}
 	}
 }
 
