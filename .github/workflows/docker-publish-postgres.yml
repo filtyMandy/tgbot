@@ -36,8 +36,8 @@ jobs:
             type=semver,pattern={{major}}
           labels: |
             org.label-schema.schema-version=1.0
-            org.label-schema.name=postgres-rewrite # 👈 ИЗМЕНЕНО: Указано новое имя образа
-            org.label-schema.description=Docker image for postgres-rewrite # 👈 ИЗМЕНЕНО: Указано новое описание образа
+            org.label-schema.name=postgres-rewrite 
+            org.label-schema.description=Docker image for postgres-rewrite 
 
       # Шаг для добавления 'latest' ТОЛЬКО для ветки postgres-rewrite
       - name: Add 'latest' tag for postgres-rewrite branch
@@ -50,8 +50,8 @@ jobs:
             type=raw,value=latest
           labels: |
             org.label-schema.schema-version=1.0
-            org.label-schema.name=postgres-rewrite # 👈 ИЗМЕНЕНО: Указано новое имя образа
-            org.label-schema.description=Docker image for postgres-rewrite # 👈 ИЗМЕНЕНО: Указано новое описание образа
+            org.label-schema.name=postgres-rewrite
+            org.label-schema.description=Docker image for postgres-rewrite
 
       - name: Build and push
         uses: docker/build-push-action@v5
