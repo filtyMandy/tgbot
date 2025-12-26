@@ -22,14 +22,14 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME_1 }}
-          password: ${{ secrets.DOCKERHUB_TOKEN_1 }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Define Docker tags (SemVer tags)
         id: docker_meta
         uses: docker/metadata-action@v4
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME_1 }}/postgres-rewrite
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/postgres-rewrite
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -45,7 +45,7 @@ jobs:
         id: docker_meta_latest
         uses: docker/metadata-action@v4
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME_1 }}/postgres-rewrite
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/my-bot-postgres
           tags: |
             type=raw,value=latest
           labels: |
