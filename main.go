@@ -32,9 +32,9 @@ func main() {
 		log.Println("Warning: Could not load .env file. Ensure environment variables are set.")
 	}
 
-	botToken := os.Getenv("TOCKEN")
+	botToken := os.Getenv("TOKEN")
 	if botToken == "" {
-		panic("Missing token: TOCKEN environment variable is not set.")
+		panic("Missing token: TOKEN environment variable is not set.")
 	}
 	superUserStr := os.Getenv("TELEGRAM_SUPER_USER")
 	if superUserStr == "" {
