@@ -16,10 +16,10 @@ import (
 func handleTopUpCallback(
 	bot *tgbotapi.BotAPI,
 	db *sql.DB,
-	fromID int64,                     // ID пользователя, который инициировал callback (менеджер/админ)
-	data string,                      // callback_data
+	fromID int64, // ID пользователя, который инициировал callback (менеджер/админ)
+	data string, // callback_data
 	callback *tgbotapi.CallbackQuery, // объект callback-query
-// accessLevel string,    // Уровень доступа теперь проверяется раньше, здесь не нужен
+	accessLevel string,
 ) {
 	switch {
 	// --- Инициация процесса пополнения ---
@@ -30,7 +30,7 @@ func handleTopUpCallback(
 			return
 		}
 		// Отправляем список работников. status "topup_select_worker" - это префикс для callback'ов выбора работника.
-		err = database.SendWorkersList(bot, db, fromID, "topup_select_worker", dep, 0)
+		err = database.SendWorkersList(bot, db, fromID, "topup_select_worker", dep, 0, 1, "worker")
 		if err != nil {
 			bot.Send(tgbotapi.NewMessage(fromID, "Не удалось отобразить список работников."))
 		}
@@ -133,7 +133,7 @@ func handleTopUpCallback(
 				return
 
 			} else if len(parts) == 4 {
-				// 👉 Обработка пагинации (перелистывание страниц)
+				// Обработка пагинации (перелистывание страниц)
 				page, err := strconv.Atoi(parts[1])
 				if err != nil {
 					bot.Send(tgbotapi.NewMessage(fromID, "Ошибка: некорректный номер страницы."))
@@ -143,7 +143,7 @@ func handleTopUpCallback(
 				status := parts[2]
 				dep := parts[3]
 
-				err = database.SendWorkersList(bot, db, fromID, status, dep, page)
+				err = database.SendWorkersList(bot, db, fromID, status, dep, page, 1, "worker")
 				if err != nil {
 					log.Printf("Ошибка при перелистывании списка работников (page %d, dep %s): %v", page, dep, err)
 					bot.Send(tgbotapi.NewMessage(fromID, "Ошибка при перелистывании списка."))

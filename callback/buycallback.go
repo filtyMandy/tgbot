@@ -99,7 +99,7 @@ func handleBuyCallback(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQu
 		buyerID, productName,
 	)
 	buyerMsg := fmt.Sprintf(
-		"Спасибо за покупку!\nВы преобрели: %s.\nПозже, когда можно будет забрать заказ.",
+		"Спасибо за покупку!\nВы преобрели: %s.\nСообщу, когда можно будет забрать заказ.",
 		productName,
 	)
 	bot.Send(tgbotapi.NewMessage(shopAdmin, adminMsg))

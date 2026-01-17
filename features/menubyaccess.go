@@ -23,7 +23,12 @@ func GenMainMenu(accessLevel string, userID, superUser int64) tgbotapi.InlineKey
 			tgbotapi.NewInlineKeyboardButtonData("✏️Данные", "menu_admin_setbal"),
 			tgbotapi.NewInlineKeyboardButtonData("🏦️ Магазин", "shop_edit"),
 			tgbotapi.NewInlineKeyboardButtonData("❗️Доступ", "accesslevel"),
+		))
+	}
+	if accessLevel == "admin" {
+		kbRows = append(kbRows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("❇️Заказы", "orders"),
+			tgbotapi.NewInlineKeyboardButtonData("📨 Регистрации", "registrations:button"),
 		))
 	}
 	if userID == superUser {

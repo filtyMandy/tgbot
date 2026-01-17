@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"tbViT/database"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -24,22 +25,22 @@ func RegistrationHandler(bot *tgbotapi.BotAPI, db *sql.DB, update tgbotapi.Updat
 
 	var regState string
 	var registrationStartTime sql.NullTime // Для nullable timestamp в PostgreSQL
-	var userNameFromDB string              // Переменная для хранения имени пользователя из БД, если оно есть
-	var adminTelegramID int64              // Переменная для ID админа ресторана
-	var adminFound bool                    // Флаг, был ли найден админ
+	//var userNameFromDB string              // Переменная для хранения имени пользователя из БД, если оно есть
+	//var adminTelegramID int64              // Переменная для ID админа ресторана
+	//var adminFound bool // Флаг, был ли найден админ
 
 	// --- Получение состояния пользователя ---
-	query := `SELECT reg_state, registration_start_time, name FROM users WHERE telegram_id = $1`
-	err := db.QueryRow(query, userID).Scan(&regState, &registrationStartTime, &userNameFromDB)
 
-	if err != nil {
-		if err == sql.ErrNoRows {
-			log.Printf("Пользователь с telegram_id %d не найден в таблице users. Инициируется регистрация.", userID)
-		} else {
-			log.Printf("Ошибка при чтении состояния пользователя для user_id %d: %v", userID, err)
-			bot.Send(tgbotapi.NewMessage(userID, "Произошла ошибка при проверке вашего статуса. Попробуйте позже."))
-			return true // Обработали, но с ошибкой
-		}
+	query := `SELECT reg_state, registration_start_time FROM users WHERE telegram_id = $1`
+	err := db.QueryRow(query, userID).Scan(&regState, &registrationStartTime)
+
+	if err == sql.ErrNoRows {
+		// Пользователь не найден - это нормально для новой регистрации
+		regState = ""
+	} else if err != nil {
+		log.Printf("Ошибка при чтении состояния пользователя для user_id %d: %v", userID, err)
+		bot.Send(tgbotapi.NewMessage(userID, "Произошла ошибка при проверке вашего статуса. Попробуйте позже."))
+		return true
 	}
 
 	// --- Обработка команды /start ---
@@ -97,7 +98,7 @@ func RegistrationHandler(bot *tgbotapi.BotAPI, db *sql.DB, update tgbotapi.Updat
 		if registrationStartTime.Valid {
 			currentTimeUTC := time.Now().UTC()
 			if currentTimeUTC.Sub(registrationStartTime.Time) > 5*time.Minute {
-				// !!! Важно: используем отдельную транзакцию для сброса, если она не была начата ранее
+				// используем отдельную транзакцию для сброса, если она не была начата ранее
 				txReset, err := db.Begin()
 				if err != nil {
 					log.Printf("Ошибка начала транзакции для сброса reg_state после таймаута (user_id %d): %v", userID, err)
@@ -106,7 +107,7 @@ func RegistrationHandler(bot *tgbotapi.BotAPI, db *sql.DB, update tgbotapi.Updat
 				}
 				defer txReset.Rollback() // Откат, если что-то пойдет не так
 
-				_, err = txReset.Exec(`UPDATE users SET reg_state=NULL, name=NULL, table_number=NULL, rest_number=NULL, registration_start_time=NULL WHERE telegram_id=$1`, userID)
+				_, err = txReset.Exec(`UPDATE users SET reg_state=NULL, name=NULL, table_number=NULL, rest_number=NULL, registration_start_time=NULL, access_level='worker' WHERE telegram_id=$1`, userID)
 				if err != nil {
 					log.Printf("Ошибка сброса reg_state после таймаута для user_id %d: %v", userID, err)
 				}
@@ -120,7 +121,6 @@ func RegistrationHandler(bot *tgbotapi.BotAPI, db *sql.DB, update tgbotapi.Updat
 		} else {
 			// Неожиданная ситуация: reg_state = 'waiting_registration_data', но registration_start_time NULL.
 			log.Printf("Предупреждение: reg_state 'waiting_registration_data' но registration_start_time NULL для user_id %d. Сбрасываем состояние.", userID)
-			// !!! Используем новую транзакцию для сброса
 			txReset, err := db.Begin()
 			if err != nil {
 				log.Printf("Ошибка начала транзакции для сброса reg_state (некорректный start_time) (user_id %d): %v", userID, err)
@@ -145,7 +145,6 @@ func RegistrationHandler(bot *tgbotapi.BotAPI, db *sql.DB, update tgbotapi.Updat
 
 		if len(parts) < 3 {
 			// Некорректный формат ввода. Сбрасываем состояние.
-			// !!! Используем новую транзакцию для сброса
 			txReset, err := db.Begin()
 			if err != nil {
 				log.Printf("Ошибка начала транзакции для сброса reg_state (некорректный формат) (user_id %d): %v", userID, err)
@@ -245,27 +244,35 @@ func RegistrationHandler(bot *tgbotapi.BotAPI, db *sql.DB, update tgbotapi.Updat
 		}
 		defer tx.Rollback() // Откат этой транзакции, если она не будет успешно закоммичена
 
-		// --- Поиск администратора ресторана ---
-		err = tx.QueryRow(`SELECT telegram_id FROM users WHERE rest_number = $1 AND access_level = 'admin' LIMIT 1`, restNumberStr).Scan(&adminTelegramID)
-		if err == sql.ErrNoRows {
+		// --- Получение всех администраторов предприятия ---
+		// Используем функцию, которая извлекает ВСЕ Telegram ID администраторов для данного restNumberStr
+		// в рамках текущей транзакции `tx`.
+		adminTelegramIDs, err := database.GetAllAdminsTelegramIDsByRest(tx, restNumberStr)
+		if err != nil {
+			// Это ошибка на уровне базы данных при выполнении запроса
+			log.Printf("❌ Ошибка при получении списка администраторов для предприятия '%s' (user_id %d): %v", restNumberStr, userID, err)
+			bot.Send(tgbotapi.NewMessage(userID, "Произошла ошибка при поиске администраторов. Пожалуйста, попробуйте позже!"))
+			// Возвращаем true, чтобы остановить процесс регистрации и позволить транзакции откатиться
+			return true
+		}
+
+		// Проверяем, были ли найдены администраторы.
+		if len(adminTelegramIDs) == 0 {
+			// Если администраторы не найдены для данного restNumber
 			bot.Send(tgbotapi.NewMessage(userID, "❗️ Ресторан с таким номером не найден или у него еще не назначен администратор. Пожалуйста, введите /start для начала регистрации заново."))
+
 			// Сбрасываем состояние пользователя.
+			// Важно: используем `tx.Exec`, так как мы находимся внутри транзакции.
 			_, errExec := tx.Exec(`UPDATE users SET reg_state=NULL, name=NULL, table_number=NULL, rest_number=NULL, registration_start_time=NULL WHERE telegram_id=$1`, userID)
 			if errExec != nil {
-				log.Printf("Ошибка сброса reg_state после ненахождения ресторана для user_id %d: %v", userID, errExec)
+				log.Printf("Ошибка сброса reg_state после ненахождения админов для user_id %d: %v", userID, errExec)
 			}
-			// Транзакция будет отменена при выходе из функции благодаря defer.
+			// Возвращаем true, так как регистрация не может быть завершена
 			return true
 		}
-		if err != nil {
-			log.Printf("Ошибка поиска администратора ресторана (rest_number %s, user_id %d): %v", restNumberStr, userID, err)
-			bot.Send(tgbotapi.NewMessage(userID, "Произошла ошибка при поиске ресторана. Попробуйте позже!"))
-			return true
-		}
-		adminFound = true // Админ найден
 
 		// --- Обновляем данные пользователя в базе данных ---
-		_, err = tx.Exec(`UPDATE users SET name=$1, table_number=$2, rest_number=$3, reg_state=NULL, registration_start_time=NULL WHERE telegram_id=$4`,
+		_, err = tx.Exec(`UPDATE users SET name=$1, table_number=$2, rest_number=$3, reg_state='', registration_start_time=NULL, access_level='' WHERE telegram_id=$4`,
 			nameInput, tableNumberStr, restNumberStr, userID)
 		if err != nil {
 			log.Printf("Ошибка обновления данных пользователя при регистрации (user_id %d): %v", userID, err)
@@ -283,24 +290,29 @@ func RegistrationHandler(bot *tgbotapi.BotAPI, db *sql.DB, update tgbotapi.Updat
 		// --- Отправляем сообщение пользователю об успешной регистрации ---
 		bot.Send(tgbotapi.NewMessage(userID, "✅ Спасибо! Ваши данные переданы на модерацию. Ожидайте подтверждения."))
 
-		// --- Отправляем уведомление админу (если админ был найден) ---
-		if adminFound {
-			txt := fmt.Sprintf(
-				"✨ Новая регистрация!\n\n👤 **Имя:** %s\n#️⃣ **Номер в расписании:** %s\n🏢 **Номер предприятия (ПБО):** %s\n\n🌐 **Username:** @%s\n🆔 **Telegram ID:** `%d`",
-				nameInput, tableNumberStr, restNumberStr, user.UserName, userID)
+		// --- Отправляем уведомление всем админам предприятия ---
 
-			approveKeyboard := tgbotapi.NewInlineKeyboardMarkup(
-				tgbotapi.NewInlineKeyboardRow(
-					tgbotapi.NewInlineKeyboardButtonData("✅ Работник", fmt.Sprintf("approve:worker:%d", userID)),
-					tgbotapi.NewInlineKeyboardButtonData("👑 Менеджер", fmt.Sprintf("approve:manager:%d", userID)),
-					tgbotapi.NewInlineKeyboardButtonData("❌ Отклонить", fmt.Sprintf("reject:%d", userID)),
-				),
-			)
+		txt := fmt.Sprintf(
+			"✨ Новая регистрация!\n\n👤 **Имя:** %s\n#️⃣ **Номер в расписании:** %s\n🏢 **Номер предприятия (ПБО):** %s\n\n🌐 **Username:** @%s\n🆔 **Telegram ID:** `%d`",
+			nameInput, tableNumberStr, restNumberStr, user.UserName, userID)
+
+		/*approveKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("✅ Работник", fmt.Sprintf("approve:worker:%d", userID)),
+				tgbotapi.NewInlineKeyboardButtonData("👑 Менеджер", fmt.Sprintf("approve:manager:%d", userID)),
+				tgbotapi.NewInlineKeyboardButtonData("❌ Отклонить", fmt.Sprintf("reject:%d", userID)),
+			),
+		)*/
+
+		for _, adminTelegramID := range adminTelegramIDs { // Итерируемся по СЛАЙСУ админов
 			adminMsg := tgbotapi.NewMessage(adminTelegramID, txt)
-			adminMsg.ReplyMarkup = approveKeyboard
-			adminMsg.ParseMode = tgbotapi.ModeMarkdown
+			/*adminMsg.ReplyMarkup = approveKeyboard
+			adminMsg.ParseMode = tgbotapi.ModeMarkdown */
+
 			if _, err := bot.Send(adminMsg); err != nil {
-				log.Printf("Ошибка отправки сообщения админу (admin_id %d, user_id %d): %v", adminTelegramID, userID, err)
+				log.Printf("❌ Ошибка отправки уведомления о регистрации (пользователь %d) админу (Telegram ID: %d): %v", userID, adminTelegramID, err)
+			} else {
+				log.Printf("✅ Уведомление о регистрации пользователя %d отправлено админу %d.", userID, adminTelegramID)
 			}
 		}
 		return true // Сообщение полностью обработано

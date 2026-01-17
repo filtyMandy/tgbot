@@ -101,7 +101,7 @@ func CompliteOrders(bot *tgbotapi.BotAPI, db *sql.DB, fromID int64, orderID int,
 			msgAdmin := tgbotapi.NewMessage(fromID, "Заказ уже был обработан! ⛔️")
 			bot.Send(msgAdmin)
 		} else {
-			msgBuyer := fmt.Sprintf("Заказа (%s) отменен.\nПодробности у администратора магазина.", product)
+			msgBuyer := fmt.Sprintf("Заказ (%s) отменен.\nПодробности у администратора магазина.", product)
 			msg := tgbotapi.NewMessage(buyerID, msgBuyer)
 			bot.Send(msg)
 			msgAdmin := tgbotapi.NewMessage(fromID, "Покупатель уведомлен об отмене заказа.❌")

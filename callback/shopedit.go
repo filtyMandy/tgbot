@@ -11,7 +11,7 @@ import (
 	"tbViT/features"
 )
 
-func handleShopEdit(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQuery, shopState map[int64]*CorrectionState) {
+func handleShopEdit(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQuery, shopState map[int64]*CorrectionState, accessLevel string) {
 	data := cq.Data
 	fromID := cq.From.ID
 

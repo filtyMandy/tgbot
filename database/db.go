@@ -1,4 +1,4 @@
-package database // Предполагается, что эти функции находятся в пакете database
+package database
 
 import (
 	"database/sql"
@@ -7,14 +7,219 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"time" // Добавлено, если нужно будет для транзакций
+	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5" // Для SendWorkersList
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
+
+func GetRegInfo(db *sql.DB, userID int64) (verified int, restNumber string, name string, tableNum string, username string, err error) {
+	err = db.QueryRow(
+		"SELECT verified, rest_number, name, table_number, username FROM users WHERE telegram_id = $1",
+		userID,
+	).Scan(&verified, &restNumber, &name, &tableNum, &username)
+	if err != nil {
+		return 0, "", "", "", "", fmt.Errorf("ошибка получения инфо о регистрации для пользователя %d: %w", userID, err)
+	}
+	return verified, restNumber, name, tableNum, username, nil
+}
+
+func SendUserListWithPagination(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, dep string, page, verifiedStatus int, callbackPrefixForUserSelection string, paginationCallbackPrefix string, headingMessage string) error {
+	const pageSize = 15
+
+	// --- 1. Определяем текстовый статус для сообщений ---
+	var statusDescription string
+	if verifiedStatus == 0 {
+		statusDescription = " (неподтвержденные)"
+	} else if verifiedStatus == 1 {
+		statusDescription = " (подтвержденные)"
+	} else {
+		statusDescription = " (все)" // Если вдруг захотим передать другой статус или игнорировать
+	}
+
+	// --- 2. Считаем общее количество пользователей. ---
+	var total int
+	// Условия фильтрации по verifiedStatus
+	var countQuery string
+	var queryParams []interface{}
+
+	if verifiedStatus == 0 || verifiedStatus == 1 {
+		countQuery = `SELECT COUNT(*) FROM users WHERE rest_number = $1 AND verified = $2`
+		queryParams = []interface{}{dep, verifiedStatus}
+	} else {
+		// Если verifiedStatus не 0 или 1, показываем всех (без фильтрации по verified)
+		countQuery = `SELECT COUNT(*) FROM users WHERE rest_number = $1`
+		queryParams = []interface{}{dep}
+	}
+
+	err := db.QueryRow(countQuery, queryParams...).Scan(&total)
+	if err != nil {
+		log.Printf("❌ Ошибка получения количества пользователей для dep %s%s: %v", dep, statusDescription, err)
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ Ошибка получения списка пользователей%s.", statusDescription)))
+		return fmt.Errorf("при получении количества пользователей для dep %s%s: %w", dep, statusDescription, err)
+	}
+
+	if total == 0 {
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ В вашем предприятии нет пользователей%s.", statusDescription)))
+		return nil
+	}
+
+	offset := page * pageSize
+
+	// --- 3. Получаем пользователей с пагинацией. ---
+	// SQL-запрос для получения данных
+	var selectQuery string
+	var selectQueryParams []interface{}
+
+	if verifiedStatus == 0 || verifiedStatus == 1 {
+		selectQuery = `
+              SELECT telegram_id, name, table_number, access_level, verified
+              FROM users
+              WHERE rest_number = $1 AND verified = $2
+              ORDER BY CAST(table_number AS INTEGER) ASC
+              LIMIT $3 OFFSET $4`
+		selectQueryParams = []interface{}{dep, verifiedStatus, pageSize, offset}
+	} else {
+		// Если verifiedStatus не 0 или 1, показываем всех (без фильтрации по verified)
+		selectQuery = `
+              SELECT telegram_id, name, table_number, access_level, verified
+              FROM users
+              WHERE rest_number = $1
+              ORDER BY CAST(table_number AS INTEGER) ASC
+              LIMIT $2 OFFSET $3`
+		selectQueryParams = []interface{}{dep, pageSize, offset}
+	}
+
+	rows, err := db.Query(selectQuery, selectQueryParams...)
+	if err != nil {
+		log.Printf("❌ Ошибка получения пользователей для dep %s%s (page %d): %v", dep, statusDescription, page, err)
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ Ошибка получения списка пользователей%s.", statusDescription)))
+		return fmt.Errorf("при получении пользователей для dep %s%s (page %d): %w", dep, statusDescription, err)
+	}
+	defer rows.Close()
+
+	buttons := [][]tgbotapi.InlineKeyboardButton{}
+	rowCount := 0
+	for rows.Next() {
+		var userID int64
+		var name, tableNum, fetchedAccessLevel string
+		var fetchedVerified int
+		if err := rows.Scan(&userID, &name, &tableNum, &fetchedAccessLevel, &fetchedVerified); err != nil {
+			log.Printf("⚠️ Ошибка сканирования строки пользователя (dep %s, status %d): %v", dep, verifiedStatus, err)
+			continue
+		}
+
+		// Форматируем accessLevel для отображения
+		displayAccessLevel := ""
+		switch fetchedAccessLevel {
+		case "worker":
+			displayAccessLevel = "Работник"
+		case "manager":
+			displayAccessLevel = "Менеджер"
+		case "admin":
+			displayAccessLevel = "Админ"
+		default:
+			displayAccessLevel = fetchedAccessLevel
+		}
+
+		// Добавляем статус подтверждения к displayAccessLevel
+		displayVerifiedStatus := ""
+		if fetchedVerified == 0 {
+			displayVerifiedStatus = " (неподтв.)"
+		} else {
+			displayVerifiedStatus = " (подтв.)"
+		}
+
+		// Текст кнопки: "Номер Фамилия Имя (УровеньДоступа СтатусПодтверждения)"
+		btnText := fmt.Sprintf("%s %s (%s%s)", tableNum, name, displayAccessLevel, displayVerifiedStatus)
+
+		// Callback data: "callbackPrefixForUserSelection:telegramid"
+		callbackData := fmt.Sprintf("%s:%d", callbackPrefixForUserSelection, userID)
+
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(btnText, callbackData),
+		))
+		rowCount++
+	}
+
+	if rowCount == 0 && total > 0 && offset < total {
+		bot.Send(tgbotapi.NewMessage(chatID, "На этой странице нет пользователей. Попробуйте перейти назад."))
+		return nil
+	}
+
+	// --- 4. Кнопки пагинации: ---
+	paginationButtons := []tgbotapi.InlineKeyboardButton{}
+
+	// В callbackData для пагинации передаем текущий verifiedStatus
+	// Формат callbackData: "paginationCallbackPrefix:page:dep:verifiedStatus"
+	if page > 0 {
+		prevCallback := fmt.Sprintf("%s:%d:%s:%d", paginationCallbackPrefix, page-1, dep, verifiedStatus)
+		paginationButtons = append(paginationButtons,
+			tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", prevCallback),
+		)
+	}
+
+	if offset+pageSize < total {
+		nextCallback := fmt.Sprintf("%s:%d:%s:%d", paginationCallbackPrefix, page+1, dep, verifiedStatus)
+		paginationButtons = append(paginationButtons,
+			tgbotapi.NewInlineKeyboardButtonData("➡️ Дальше", nextCallback),
+		)
+	}
+
+	if len(paginationButtons) > 0 {
+		buttons = append(buttons, paginationButtons)
+	}
+
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages == 0 && total > 0 {
+		totalPages = 1
+	}
+
+	// Отправка сообщения
+	replyMsgText := fmt.Sprintf("%s (страница %d/%d):", headingMessage, page+1, totalPages)
+	replyMsg := tgbotapi.NewMessage(chatID, replyMsgText)
+	replyMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
+	_, err = bot.Send(replyMsg)
+	if err != nil {
+		log.Printf("❌ Ошибка отправки сообщения со списком пользователей %s для chatID %d: %v", statusDescription, chatID, err)
+		return fmt.Errorf("при отправке сообщения со списком пользователей %s: %w", statusDescription, chatID, err)
+	}
+	return nil
+}
+
+// GetAllAdminsTelegramIDsByRest извлекает Telegram ID всех пользователей
+// с уровнем доступа 'admin' для указанного номера предприятия (rest_number).
+func GetAllAdminsTelegramIDsByRest(tx *sql.Tx, restNumber string) ([]int64, error) {
+	// Запрос выбирает telegram_id из таблицы users, где access_level = 'admin'
+	// и rest_number соответствует заданному.
+	query := `SELECT telegram_id FROM users WHERE access_level = 'admin' AND rest_number = $1`
+
+	rows, err := tx.Query(query, restNumber) // Используем tx.Query()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query for admin IDs by rest number '%s' within transaction: %w", restNumber, err)
+	}
+	defer rows.Close() // Обязательно закрываем rows после использования
+
+	var adminIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			// Логируем предупреждение, но продолжаем, если один ID не удалось просканировать
+			log.Printf("⚠️ Warning: Failed to scan admin Telegram ID for rest number '%s' from transaction: %v", restNumber, err)
+			continue
+		}
+		adminIDs = append(adminIDs, id)
+	}
+
+	// Проверяем ошибки после итерации по всем строкам
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating over admin IDs rows for rest number '%s' from transaction: %w", restNumber, err)
+	}
+
+	return adminIDs, nil
+}
 
 // ChangeAccess обновляет уровень доступа пользователя.
 func ChangeAccess(db *sql.DB, userID int64, accessLevel string) error {
-	// В PostgreSQL плейсхолдеры нумеруются: $1, $2, ...
 	query := `UPDATE users SET access_level = $1 WHERE telegram_id = $2`
 	result, err := db.Exec(query, accessLevel, userID)
 	if err != nil {
@@ -42,9 +247,7 @@ func ChangeAccess(db *sql.DB, userID int64, accessLevel string) error {
 // UpdateRest обновляет rest_number пользователя или создает нового, если не существует.
 func UpdateRest(db *sql.DB, userID int64, value string) error {
 	// Проверяем существование пользователя
-	// PostgreSQL: EXISTS(SELECT 1 FROM ...) работает аналогично
 	var exists bool
-	// Используем $1 для плейсхолдера
 	row := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE telegram_id = $1)`, userID)
 	err := row.Scan(&exists)
 	if err != nil {
@@ -54,7 +257,6 @@ func UpdateRest(db *sql.DB, userID int64, value string) error {
 
 	if exists {
 		// Обновление существующего пользователя
-		// Используем $1, $2 для плейсхолдеров
 		_, err = db.Exec(`UPDATE users SET rest_number = $1 WHERE telegram_id = $2`, value, userID)
 		if err != nil {
 			log.Printf("Ошибка при обновлении пользователя %d: %v", userID, err)
@@ -63,14 +265,10 @@ func UpdateRest(db *sql.DB, userID int64, value string) error {
 		log.Printf("rest_number для %d обновлен на %s", userID, value)
 	} else {
 		// Создание нового пользователя
-		// INSERT INTO ... VALUES ($1, $2, ...)
-		// Для 'SuperUser', '999', 'admin', 1 - это значения по умолчанию.
-		// Убедись, что типы данных в твоей таблице соответствуют.
-		// 'verified' часто boolean, но в твоем коде 1 (int) - ок, если колонка numeric/int.
 		_, err = db.Exec(`
-            INSERT INTO users(telegram_id, rest_number, name, table_number, access_level, verified)
-            VALUES($1, $2, $3, $4, $5, $6)`,
-			userID, value, "SuperUser", "999", "admin", 1) // Для PostgreSQL 'verified' лучше использовать TRUE/FALSE, если тип boolean
+            INSERT INTO users(telegram_id, rest_number, name, table_number, access_level, verified, reg_state)
+            VALUES($1, $2, $3, $4, $5, $6, $7)`,
+			userID, value, "SuperUser", "999", "admin", 1, "")
 		if err != nil {
 			log.Printf("Ошибка при создании пользователя %d: %v", userID, err)
 			return fmt.Errorf("при создании пользователя %d: %w", userID, err)
@@ -91,27 +289,71 @@ func DeleteUser(db *sql.DB, telegramID int64) error {
 	return nil
 }
 
+/*
 // SendWorkersString формирует строку со списком сотрудников для определенного предприятия.
+
+	func SendWorkersString(db *sql.DB, fromID int64) (string, error) {
+		// Предполагается, что SameRest() корректно возвращает rest_number для PostgreSQL
+		restNum, err := SameRest(db, fromID)
+		if err != nil {
+			log.Printf("Ошибка получения rest_number для %d: %v", fromID, err)
+			return "", fmt.Errorf("при получении rest_number для %d: %w", fromID, err)
+		}
+		// restNum должен быть целым числом для запроса. Если SameRest возвращает string,
+		// нужно его преобразовать. Предполагаем, что он уже int.
+		log.Printf("rest_number для %d: %d", fromID, restNum)
+
+		// PostgreSQL: CAST(table_number AS INTEGER) ASC - стандартный синтаксис.
+		// Плейсхолдеры $1, $2, ...
+		query := `SELECT table_number, name, access_level, current_balance
+	              FROM users
+	              WHERE rest_number = $1 AND verified =  1
+	              ORDER BY CAST(table_number AS INTEGER) ASC`
+		rows, err := db.Query(query, restNum)
+		if err != nil {
+			log.Printf("Ошибка загрузки списка сотрудников для rest_number %d: %v", restNum, err)
+			return "", fmt.Errorf("при загрузке списка сотрудников для rest_number %d: %w", restNum, err)
+		}
+		defer rows.Close()
+
+		var list strings.Builder
+		for rows.Next() {
+			var num, name, access string
+			var balance int
+			// Scan работает так же
+			if err := rows.Scan(&num, &name, &access, &balance); err != nil {
+				log.Printf("Ошибка сканирования строки в SendWorkersString (rest_number %d): %v", restNum, err)
+				// Продолжаем, если одна строка некорректна, но лучше логировать
+				continue
+			}
+			// Формат вывода остается прежним
+			list.WriteString(fmt.Sprintf("%s %s|%s|%d🌟\n", num, name, access, balance))
+		}
+
+		if err = rows.Err(); err != nil {
+			log.Printf("Ошибка итерации по строкам в SendWorkersString (rest_number %d): %v", restNum, err)
+			return "", fmt.Errorf("при итерации по строкам для rest_number %d: %w", restNum, err)
+		}
+		return list.String(), nil
+	}
+*/
+const WORKER_COOLDOWN_DURATION = 12 * time.Hour
+
 func SendWorkersString(db *sql.DB, fromID int64) (string, error) {
-	// Предполагается, что SameRest() корректно возвращает rest_number для PostgreSQL
 	restNum, err := SameRest(db, fromID)
 	if err != nil {
-		log.Printf("Ошибка получения rest_number для %d: %v", fromID, err)
+		log.Printf("❌ Ошибка получения rest_number для %d: %v", fromID, err)
 		return "", fmt.Errorf("при получении rest_number для %d: %w", fromID, err)
 	}
-	// restNum должен быть целым числом для запроса. Если SameRest возвращает string,
-	// нужно его преобразовать. Предполагаем, что он уже int.
-	log.Printf("rest_number для %d: %d", fromID, restNum)
+	log.Printf("ℹ️ rest_number для %d: %d", fromID, restNum)
 
-	// PostgreSQL: CAST(table_number AS INTEGER) ASC - стандартный синтаксис.
-	// Плейсхолдеры $1, $2, ...
-	query := `SELECT table_number, name, access_level, current_balance
+	query := `SELECT table_number, name, access_level, current_balance, last_ts
               FROM users
-              WHERE rest_number = $1
+              WHERE rest_number = $1 AND verified = 1
               ORDER BY CAST(table_number AS INTEGER) ASC`
 	rows, err := db.Query(query, restNum)
 	if err != nil {
-		log.Printf("Ошибка загрузки списка сотрудников для rest_number %d: %v", restNum, err)
+		log.Printf("❌ Ошибка загрузки списка сотрудников для rest_number %d: %v", restNum, err)
 		return "", fmt.Errorf("при загрузке списка сотрудников для rest_number %d: %w", restNum, err)
 	}
 	defer rows.Close()
@@ -120,27 +362,31 @@ func SendWorkersString(db *sql.DB, fromID int64) (string, error) {
 	for rows.Next() {
 		var num, name, access string
 		var balance int
-		// Scan работает так же
-		if err := rows.Scan(&num, &name, &access, &balance); err != nil {
-			log.Printf("Ошибка сканирования строки в SendWorkersString (rest_number %d): %v", restNum, err)
-			// Продолжаем, если одна строка некорректна, но лучше логировать
+		var lastTs int64
+
+		if err := rows.Scan(&num, &name, &access, &balance, &lastTs); err != nil {
+			log.Printf("⚠️ Ошибка сканирования строки в SendWorkersString (rest_number %d): %v", restNum, err)
 			continue
 		}
-		// Формат вывода остается прежним
-		list.WriteString(fmt.Sprintf("%s %s|%s|%d🌟\n", num, name, access, balance))
+
+		cooldownString := "⏳ Нет" // По умолчанию, если кулдауна нет
+
+		if lastTs > 0 { // Проверяем, был ли last_ts вообще установлен
+			cooldownStartTime := time.Unix(lastTs, 0)
+			cooldownEndTime := cooldownStartTime.Add(WORKER_COOLDOWN_DURATION) // Конец кулдауна
+			durationLeft := time.Until(cooldownEndTime)                        // Сколько осталось до конца кулдауна
+
+			cooldownString = formatDuration(durationLeft)
+		}
+
+		list.WriteString(fmt.Sprintf("%s %s|%s|%d🌟|%s\n", num, name, access, balance, cooldownString))
 	}
 
-	if err = rows.Err(); err != nil {
-		log.Printf("Ошибка итерации по строкам в SendWorkersString (rest_number %d): %v", restNum, err)
-		return "", fmt.Errorf("при итерации по строкам для rest_number %d: %w", restNum, err)
-	}
 	return list.String(), nil
 }
 
-// ChangeRole меняет роль пользователя по номеру стола и проверяет, что они в одном предприятии.
+// ChangeRole меняет роль пользователя по номеру и проверяет, что они в одном предприятии.
 func ChangeRole(db *sql.DB, oldAdminID int64, tableNumber, role string) error {
-	// PostgreSQL: Используем $1, $2, $3 для подстановки.
-	// subquery в WHERE работает так же.
 	query := `
         SELECT telegram_id FROM users
         WHERE table_number = $1 AND rest_number = (
@@ -167,7 +413,7 @@ func ChangeRole(db *sql.DB, oldAdminID int64, tableNumber, role string) error {
 	}
 
 	// Если роль — admin, то понижаем старого админа
-	if role == "admin" {
+	/*if role == "admin" {
 		// $1 - oldAdminID
 		demoteQuery := `UPDATE users SET access_level = 'manager' WHERE telegram_id = $1`
 		_, err = db.Exec(demoteQuery, oldAdminID)
@@ -177,7 +423,7 @@ func ChangeRole(db *sql.DB, oldAdminID int64, tableNumber, role string) error {
 			return fmt.Errorf("при понижении старого админа %d: %w", oldAdminID, err)
 		}
 		log.Printf("Старый админ %d понижен до manager", oldAdminID)
-	}
+	}*/
 	log.Printf("Роль пользователя %d изменена на %s", newUserID, role)
 	return nil
 }
@@ -199,8 +445,6 @@ func GetWorkerInfoValues(db *sql.DB, workerID int64) (string, string, string, in
 }
 
 // GetWorkerInfo форматирует информацию о сотруднике в строку.
-// Эта функция использует GetWorkerInfoValues, поэтому ее можно переписать,
-// если GetWorkerInfoValues будет изменена.
 func GetWorkerInfo(db *sql.DB, workerID int64) string {
 	tableNumber, name, access, balance, err := GetWorkerInfoValues(db, workerID)
 	if err != nil {
@@ -285,10 +529,8 @@ func GetAccessLevel(db *sql.DB, userID int64) (string, error) {
 }
 
 // GetUserDep получает rest_number (предприятие) пользователя.
-// Предполагается, что SameRest() вызывается отдельно, если нужен rest_number текущего пользователя.
 func GetUserDep(db *sql.DB, telegramID int64) (string, error) {
 	var dep string
-	// PostgreSQL: SELECT ... WHERE telegram_id = $1
 	query := `SELECT rest_number FROM users WHERE telegram_id = $1`
 	err := db.QueryRow(query, telegramID).Scan(&dep)
 	if err != nil {
@@ -302,15 +544,15 @@ func GetUserDep(db *sql.DB, telegramID int64) (string, error) {
 }
 
 // SendWorkersList отправляет список работников с пагинацией.
-func SendWorkersList(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, status string, dep string, page int) error {
+func SendWorkersList(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, status string, dep string, page int, verified int, accessLevel string) error {
 	const pageSize = 15
 
 	// Считаем общее количество работников.
 	// PostgreSQL: COUNT(*)
 	// Проверяем, что dep - это строка, а не число, если rest_number в базе строка.
 	var total int
-	countQuery := `SELECT COUNT(*) FROM users WHERE rest_number = $1 AND access_level = 'worker' AND verified = 1` // verified=TRUE для boolean
-	err := db.QueryRow(countQuery, dep).Scan(&total)
+	countQuery := `SELECT COUNT(*) FROM users WHERE rest_number = $1 AND access_level = $2 AND verified = $3`
+	err := db.QueryRow(countQuery, dep, accessLevel, verified).Scan(&total)
 	if err != nil {
 		log.Printf("Ошибка получения количества работников для dep %s: %v", dep, err)
 		bot.Send(tgbotapi.NewMessage(chatID, "Ошибка получения количества работников."))
@@ -324,15 +566,12 @@ func SendWorkersList(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, status stri
 
 	offset := page * pageSize
 
-	// Получаем работников с пагинацией.
-	// PostgreSQL: LIMIT ?, OFFSET ? - здесь тоже $1, $2, $3
-	// Убедись, что 'dep' - это строка, если rest_number в базе строка.
 	query := `SELECT telegram_id, name, table_number
               FROM users
-              WHERE rest_number = $1 AND access_level = 'worker' AND verified = 1
+              WHERE rest_number = $1 AND access_level = $2 AND verified = $3
               ORDER BY CAST(table_number AS INTEGER) ASC
-              LIMIT $2 OFFSET $3`
-	rows, err := db.Query(query, dep, pageSize, offset)
+              LIMIT $4 OFFSET $5`
+	rows, err := db.Query(query, dep, accessLevel, verified, pageSize, offset)
 	if err != nil {
 		log.Printf("Ошибка получения работников для dep %s (page %d): %v", dep, page, err)
 		bot.Send(tgbotapi.NewMessage(chatID, "Ошибка получения работников."))
@@ -438,7 +677,6 @@ func GetBalance(db *sql.DB, userID int64) (int, error) {
 
 func SameRest(db *sql.DB, userID int64) (int64, error) {
 	var rn int64
-	// PostgreSQL: SELECT rest_number FROM users WHERE telegram_id = $1
 	query := `SELECT rest_number FROM users WHERE telegram_id = $1`
 	err := db.QueryRow(query, userID).Scan(&rn)
 	if err != nil {
@@ -455,7 +693,6 @@ func SameRest(db *sql.DB, userID int64) (int64, error) {
 // CanManagerChangeBalance проверяет, прошло ли достаточно времени с последнего изменения баланса менеджером.
 func CanManagerChangeBalance(db *sql.DB, workerID int64) (bool, string) {
 	var lastTs int64
-	// PostgreSQL: SELECT last_ts FROM users WHERE telegram_id = $1
 	query := `SELECT last_ts FROM users WHERE telegram_id = $1`
 	// Обрабатываем sql.ErrNoRows, если пользователя нет (хотя в контексте TopUpBalance, он скорее всего есть)
 	err := db.QueryRow(query, workerID).Scan(&lastTs)
@@ -541,11 +778,6 @@ func TopUpBalance(db *sql.DB, workerID int64, amount int) (string, bool, error) 
 		return "Ошибка коммита транзакции", false, fmt.Errorf("при коммите транзакции: %w", err)
 	}
 
-	// Получаем новый баланс для сообщения
-	// Важно: GetBalance использует отдельное соединение или просто db.QueryRow.
-	// Если хочешь получить баланс из той же транзакции, нужно использовать tx.QueryRow.
-	// Для простоты, используем db, но учти, что это может быть не абсолютно точное значение,
-	// если были другие параллельные операции.
 	cb, getBalanceErr := GetBalance(db, workerID) // Получаем обновленный баланс
 	if getBalanceErr != nil {
 		log.Printf("Ошибка получения нового баланса для %d после пополнения: %v", workerID, getBalanceErr)
@@ -555,4 +787,41 @@ func TopUpBalance(db *sql.DB, workerID int64, amount int) (string, bool, error) 
 
 	message := fmt.Sprintf("Баланс успешно пополнен на %d. Текущий баланс: %d", amount, cb)
 	return message, ok, nil
+}
+
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "✅" // Если кулдаун закончился
+	}
+
+	days := int(d.Hours() / 24)
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+	seconds := int(d.Seconds()) % 60
+
+	parts := []string{}
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%dд", days))
+	}
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%dч", hours))
+	}
+	if minutes > 0 {
+		parts = append(parts, fmt.Sprintf("%dм", minutes))
+	}
+	if seconds > 0 && len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%dс", seconds))
+	} else if seconds > 0 && len(parts) < 2 {
+		parts = append(parts, fmt.Sprintf("%dс", seconds))
+	}
+
+	if len(parts) == 0 {
+		return "✅"
+	}
+
+	if len(parts) > 2 {
+		return strings.Join(parts[:2], " ")
+	}
+
+	return strings.Join(parts, " ")
 }

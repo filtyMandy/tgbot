@@ -9,7 +9,7 @@ import (
 	"tbViT/features"
 )
 
-func handleOrderComplete(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQuery) {
+func handleOrderComplete(bot *tgbotapi.BotAPI, db *sql.DB, cq *tgbotapi.CallbackQuery, accessLevel string) {
 	data := cq.Data
 	fromID := cq.From.ID
 
