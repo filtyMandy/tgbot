@@ -84,6 +84,11 @@ func handleTopUpCallback(
 
 		if isSuccess {
 			bot.Send(tgbotapi.NewMessage(workerID, fmt.Sprintf("Ваш баланс пополнен на %d 🌟!", amount)))
+
+			err = database.LogBalanceTransaction(db, fromID, workerID, amount)
+			if err != nil {
+				log.Printf("Ошибка записи в историю баланса для workerID %d: %v", workerID, err)
+			}
 		}
 
 		// Сбрасываем tmp_field менеджера, т.к. операция завершена

@@ -12,13 +12,117 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-func GetRegInfo(db *sql.DB, userID int64) (verified int, restNumber string, name string, tableNum string, username string, err error) {
+type SimplifiedTransactionRecord struct {
+	ID                   int
+	TransactionDate      time.Time
+	RestaurantID         int
+	InitiatorUserID      int64
+	InitiatorName        string
+	InitiatorTableNum    string
+	TargetWorkerID       int64
+	TargetWorkerName     string
+	TargetWorkerTableNum string
+	Amount               int
+}
+
+func GetTopUpHistory(db *sql.DB, restNum int, limit int) ([]string, error) {
+	// SQL запрос с JOIN для получения имени инициатора и целевого работника из поля 'name'
+	// Username не запрашивается, так как не требуется для вывода и name гарантированно не NULL
+	query := `
+        SELECT
+            btl.id,
+            btl.transaction_date,
+            btl.rest_number,
+            btl.initiator_user_id,
+            ui.name AS initiator_name,
+             ui.table_number AS initiator_table_number,
+            btl.target_worker_id,
+            uw.name AS worker_name,
+            uw.table_number AS worker_table_number,
+            btl.amount
+        FROM
+            balance_transactions_log AS btl
+        JOIN
+            users AS ui ON btl.initiator_user_id = ui.telegram_id
+        JOIN
+            users AS uw ON btl.target_worker_id = uw.telegram_id
+        WHERE
+            btl.rest_number = $1
+        ORDER BY
+            btl.transaction_date DESC
+        LIMIT $2;
+    `
+
+	rows, err := db.Query(query, restNum, limit)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка выполнения SQL запроса для получения истории пополнений: %w", err)
+	}
+	defer rows.Close()
+
+	var history []string
+	for rows.Next() {
+		var record SimplifiedTransactionRecord
+		err := rows.Scan(
+			&record.ID,
+			&record.TransactionDate,
+			&record.RestaurantID,
+			&record.InitiatorUserID,
+			&record.InitiatorName,
+			&record.InitiatorTableNum,
+			&record.TargetWorkerID,
+			&record.TargetWorkerName,
+			&record.TargetWorkerTableNum,
+			&record.Amount,
+		)
+		if err != nil {
+			log.Printf("Ошибка сканирования записи истории пополнений: %v", err)
+			continue // Продолжаем обрабатывать другие записи, логируя ошибку
+		}
+
+		// Форматируем строку в желаемый вид: "Инициатор -> Сумма -> Работник"
+		historyString := fmt.Sprintf("%s %s -> %d🌟 -> %s %s", record.InitiatorTableNum, record.InitiatorName, record.Amount, record.TargetWorkerTableNum, record.TargetWorkerName)
+		history = append(history, historyString)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("ошибка после итерации по строкам истории пополнений: %w", err)
+	}
+
+	return history, nil
+}
+
+func LogBalanceTransaction(db *sql.DB, initiatorUserID int64, workerID int64, amount int) error {
+	_, restNum, _, _, _, err := GetRegInfo(db, initiatorUserID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения информации о регистрации инициатора %d: %w", initiatorUserID, err)
+	}
+
+	query := `
+        INSERT INTO balance_transactions_log (rest_number, initiator_user_id, target_worker_id, amount)
+        VALUES ($1, $2, $3, $4);
+    `
+	_, err = db.Exec(query,
+		restNum,
+		initiatorUserID,
+		workerID,
+		amount,
+	)
+
+	if err != nil {
+		return fmt.Errorf("ошибка выполнения SQL запроса для записи транзакции баланса: %w", err)
+	}
+
+	log.Printf("Запись транзакции: Ресторан %d, От %d, Кому %d, Сумма %d", restNum, initiatorUserID, workerID, amount)
+	return nil
+}
+
+func GetRegInfo(db *sql.DB, userID int64) (verified int, restNumber int, name string, tableNum string, username string, err error) {
 	err = db.QueryRow(
 		"SELECT verified, rest_number, name, table_number, username FROM users WHERE telegram_id = $1",
 		userID,
 	).Scan(&verified, &restNumber, &name, &tableNum, &username)
 	if err != nil {
-		return 0, "", "", "", "", fmt.Errorf("ошибка получения инфо о регистрации для пользователя %d: %w", userID, err)
+		return 0, 0, "", "", "", fmt.Errorf("ошибка получения инфо о регистрации для пользователя %d: %w", userID, err)
 	}
 	return verified, restNumber, name, tableNum, username, nil
 }

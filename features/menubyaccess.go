@@ -29,6 +29,7 @@ func GenMainMenu(accessLevel string, userID, superUser int64) tgbotapi.InlineKey
 		kbRows = append(kbRows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("❇️Заказы", "orders"),
 			tgbotapi.NewInlineKeyboardButtonData("📨 Регистрации", "registrations:button"),
+			tgbotapi.NewInlineKeyboardButtonData("🏺 История", "history_topup"),
 		))
 	}
 	if userID == superUser {

@@ -66,14 +66,6 @@ func main() {
 	}
 	log.Println("Successfully connected to PostgreSQL database.")
 
-	// --- Создание таблиц (если не существуют) ---
-	// PostgreSQL синтаксис для CREATE TABLE:
-	// INTEGER PRIMARY KEY AUTOINCREMENT -> SERIAL PRIMARY KEY (или BIGSERIAL PRIMARY KEY для больших ID)
-	// TEXT -> TEXT
-	// INTEGER -> INTEGER
-	// DATETIME -> TIMESTAMP WITHOUT TIME ZONE (или TIMESTAMP WITH TIME ZONE, если нужно учитывать часовые пояса)
-	// TIMESTAMP DEFAULT CURRENT_TIMESTAMP -> TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP (рекомендуется)
-	// BIGINT для telegram_id, так как он может быть большим.
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS users (
 		id SERIAL PRIMARY KEY, -- SERIAL автоматически создает последовательность и BIGINT
 		telegram_id BIGINT UNIQUE NOT NULL,
@@ -89,7 +81,7 @@ func main() {
         last_ts BIGINT DEFAULT 0, -- Unix timestamp
         tmp_field TEXT,
         special_roll TEXT,
-        registration_start_time TIMESTAMP WITH TIME ZONE -- TIMESTAMP WITH TIME ZONE предпочтительнее
+        registration_start_time TIMESTAMP WITH TIME ZONE 
 	)`)
 	if err != nil {
 		log.Fatalf("Failed to create users table in PostgreSQL: %v", err)
@@ -114,7 +106,19 @@ func main() {
 		product_id  INTEGER,
 		rest_number INTEGER,
 		price INTEGER,
-		created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP -- TIMESTAMP WITH TIME ZONE предпочтительнее
+		created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err != nil {
+		log.Fatalf("Failed to create orders table in PostgreSQL: %v", err)
+	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS balance_transactions_log (
+	id SERIAL PRIMARY KEY,                                -- Уникальный идентификатор записи
+    transaction_date TIMESTAMPTZ DEFAULT NOW(),           -- Дата и время транзакции
+    rest_number INT NOT NULL,                           -- Номер ресторана
+    initiator_user_id BIGINT NOT NULL,                    -- ID пользователя, инициировавшего транзакцию (например, админ)
+    target_worker_id BIGINT NOT NULL,                     -- ID работника, чей баланс был изменен
+    amount INT NOT NULL                                   -- Сумма пополнения
 	)`)
 	if err != nil {
 		log.Fatalf("Failed to create orders table in PostgreSQL: %v", err)

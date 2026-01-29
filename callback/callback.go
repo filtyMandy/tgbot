@@ -37,6 +37,11 @@ func HandleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Callbac
 	log.Printf("Callback data: %s, user: %d, level: %s", data, fromID, accessLevel)
 
 	switch {
+	case strings.HasPrefix(data, "history_topup") && (accessLevel == "admin"):
+		handleHistoryTopUp(db, callback, fromID, data, bot)
+		answerCallback(bot, callback.ID, "")
+		return
+
 	case strings.HasPrefix(data, "registrations:button") && accessLevel == "admin":
 		dep, err := database.GetUserDep(db, fromID)
 		if err != nil {
@@ -47,8 +52,8 @@ func HandleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Callbac
 
 		err = database.SendUserListWithPagination(
 			bot, db, fromID, dep, 0, 0, // page 0, verifiedStatus 0 (неподтвержденные)
-			"registrations:list",       // Префикс для кнопок выбора пользователя
-			"registrations:pagination", // Префикс для кнопок пагинации
+			"registrations:list",                      // Префикс для кнопок выбора пользователя
+			"registrations:pagination",                // Префикс для кнопок пагинации
 			"Выберите пользователя для подтверждения", // Заголовок сообщения
 		)
 		if err != nil {
@@ -136,7 +141,7 @@ func HandleCallback(bot *tgbotapi.BotAPI, db *sql.DB, callback *tgbotapi.Callbac
 		// Формируем текст сообщения
 		txt := fmt.Sprintf(
 			"✨ Подтвердите регистрацию!\n\n👤 **Имя:** %s\n#️⃣ **Номер в расписании:** %s"+
-				"\n🏢 **Номер предприятия (ПБО):** %s\n\n🌐 **Username:** @%s\n🆔 **Telegram ID:** `%d`",
+				"\n🏢 **Номер предприятия (ПБО):** %d\n\n🌐 **Username:** @%s\n🆔 **Telegram ID:** `%d`",
 			name, tableNum, rest, username, userID)
 
 		// Инлайн-клавиатура с выбором допуска
